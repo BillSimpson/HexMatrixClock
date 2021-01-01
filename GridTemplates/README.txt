@@ -1,0 +1,3 @@
+These grid templates are 600 dots per inch (DPI) and should be printed at 100% scaling.  After you print, assure that the vertical spacing between the hexels is 1.31 inches or you will have problems aligning your LEDs to the grid.  If you have a large-format printer capable of printing 11x17 inches, use that to print the full page.  If you don't have a large-format printer, use the half-page version.  
+
+These images are produced by the python code "hex-matrix-printgrid.py" in the HelperCode directory, and you can modify that python code to print other grids or at other page sizes.  
