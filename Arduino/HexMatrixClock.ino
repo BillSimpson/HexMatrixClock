@@ -26,7 +26,7 @@ FASTLED_USING_NAMESPACE
 //        In principle at 9600 baud, the transferred hexgrids could go as fast as 60 Hz
 //        These binary masks are displayed without two-tone colors, only fg1 and bg
 
-#define VERSION        F("HexMatrixClock Version 4.0\0")
+#define VERSION        F("HexMatrixClock Version 4.1\0")
 #define DATA_PIN       6
 #define LED_TYPE       WS2811
 #define COLOR_ORDER    GRB
@@ -58,6 +58,10 @@ FASTLED_USING_NAMESPACE
 #define LOW_LUX        0.5
 #define WALK_PAINT     0
 #define WALK_CONWAY    1
+#define WALK_SYMMETRY  2
+#define SYMMETRY_INVERSION    4
+#define SYMMETRY_MIRROR_V     2
+#define SYMMETRY_MIRROR_H     1
 
 // define transitions enum
 enum transition_type { abrupt, conway, swipeoff };
@@ -90,6 +94,7 @@ int swipedir;
 int q_2color = Q_2COLOR_TIME;
 uint8_t curr_hue = DEFAULT_HUE;
 uint8_t hue_shift;
+uint8_t curr_symmetry;
 
 // The display is 3.1 digits, and in hex coordinates, from right to left, the origin q and r are:
 // Note that the last digit is can only display 1 or 0
@@ -125,6 +130,11 @@ const uint16_t PROGMEM digit_bitmasks[] = {
 
 int hgr_read(word* hgr, int q, int r) {
   return(bitRead(hgr[r-MIN_R],q-MIN_Q));
+}
+
+int hgr_read_bounds(word* hgr, int q, int r) {
+  if ( (q >= MIN_Q) and (q <= MAX_Q) and (r >= MIN_R) and (r <= MAX_R) ) return(bitRead(hgr[r-MIN_R],q-MIN_Q));
+  else return(0);
 }
 
 void hgr_write(word* hgr, int q, int r, int b) {
@@ -200,6 +210,29 @@ void paint(int lednum, int q, int r) {
   leds[lednum] = result;
 }
 
+void check_symmetry(int q, int r) {
+  if (curr_symmetry == 0) return;
+  int state_qr = hgr_read(curr_hgr, q, r);
+  if ((curr_symmetry & SYMMETRY_INVERSION) > 0) {// search to check inversion
+    if (state_qr != hgr_read_bounds(curr_hgr, -q, -r) ) {
+      curr_symmetry = curr_symmetry - SYMMETRY_INVERSION;  
+//      Serial.println(F("inversion symmetry failed"));
+    }
+  }
+  if ((curr_symmetry & SYMMETRY_MIRROR_V) > 0) { // search to check vertical mirror symmetry (left/right)
+    if (state_qr != hgr_read_bounds(curr_hgr, -q, (r+q)) ) { 
+      curr_symmetry = curr_symmetry - SYMMETRY_MIRROR_V;  
+//      Serial.println(F("vertical mirror symmetry failed"));
+    }
+  }
+  if ((curr_symmetry & SYMMETRY_MIRROR_H) > 0) { // search to check horizontal mirror symmetry (top/bottom)
+    if (state_qr != hgr_read_bounds(curr_hgr, q, (-1*(r+q)) ) ) {
+      curr_symmetry = curr_symmetry - SYMMETRY_MIRROR_H;  
+//      Serial.println(F("horizontal mirror symmetry failed"));
+    }
+  }
+}
+
 void walk_hgr(int walk_type) {
   int i, q, r, lednum;
   
@@ -215,6 +248,9 @@ void walk_hgr(int walk_type) {
           case WALK_CONWAY:
             conway_cell(q,r);
             break;
+          case WALK_SYMMETRY:
+            check_symmetry(q,r);
+            break;
         }
         lednum++;
         r++;
@@ -229,6 +265,9 @@ void walk_hgr(int walk_type) {
             break;
           case WALK_CONWAY:
             conway_cell(q,r);
+            break;
+          case WALK_SYMMETRY:
+            check_symmetry(q,r);
             break;
         }
         lednum++;
@@ -266,6 +305,11 @@ void conway_start() {
   hgr_wipe(curr_hgr);     // clear curr_hgr
 }
 
+void check_symmetry_start() {
+  // start the search assuming all symmetries exist and then eliminate them during the search
+  curr_symmetry = SYMMETRY_INVERSION | SYMMETRY_MIRROR_H | SYMMETRY_MIRROR_V;
+}
+
 void conway_cell(int q, int r) {
   if ( neighbors(last_hgr, q, r) == 2 )    // check if exactly two neighbors
     hgr_write(curr_hgr, q, r, 1);
@@ -290,6 +334,15 @@ void swipeoff_step() {
       hgr_write(curr_hgr, q, r, value);
     }
   }
+}
+
+void print_symmetry() {
+  Serial.print(F("Current state has "));
+  if (curr_symmetry == 0) Serial.print(F("no "));
+  if ((curr_symmetry & SYMMETRY_INVERSION) > 0) Serial.print(F("inversion ")); 
+  if ((curr_symmetry & SYMMETRY_MIRROR_V) > 0) Serial.print(F("vertical mirror ")); 
+  if ((curr_symmetry & SYMMETRY_MIRROR_H) > 0) Serial.print(F("horizontal mirror ")); 
+  Serial.println(F("symmetry"));
 }
 
 void display_temp(int unit) {
@@ -357,10 +410,10 @@ void poll_serial() {
         Serial.print(F("Received <"));
         Serial.print(inBuffer);
         argument = atol(inBuffer);
-        Serial.print(F("> argument: "));
+        Serial.print(F("> as argument, which parsed to: "));
         Serial.print(argument);
         commandchar = (char)inChar;
-        Serial.print(F("\tcommand: "));
+        Serial.print(F(" for Command: "));
         Serial.println(commandchar);
         buffer_pos = 0;         // clear the buffer for new input:
       }
@@ -456,7 +509,7 @@ int parse_command() {
           Serial.println(curr_time.minute());
           Serial.print(F("Temperature is "));
           Serial.print(round(rtc.getTemperature()));          
-          Serial.println(F(" °C"));
+          Serial.println(F(" C"));
           Serial.print(F("Ambient light sensor reads "));
           Serial.print(curr_lux);
           Serial.println(F(" lux"));
@@ -480,6 +533,12 @@ int parse_command() {
           Serial.println(F("sWipeoff direction invalid"));
         }
       break;  
+      case 'Y':
+      case 'y':
+        check_symmetry_start();
+        walk_hgr(WALK_SYMMETRY);
+        print_symmetry();
+      break;
       case 'X':
       case 'x':
         if ((argument > 0) && (argument < 10001 )) { // hold duration is valid
@@ -579,8 +638,14 @@ void loop() {
      // check if we are within the TRANSITION_MILLIS of the minute boundary
     curr_time = rtc.now();
     if ( curr_time.second() > (60-TRANSITION_MILLIS/1000) ) {
+      // determine if the current pattern is symmetric
+      check_symmetry_start();
+      walk_hgr(WALK_SYMMETRY);
+      print_symmetry();
       color_mode = huewave;
-      if (random8() < 128) {  // either play conway or swipeoff
+      if ((random8() < 128) || (curr_symmetry >0)) {  
+        // get a random number to help select if we should play conway or swipeoff
+        // if the pattern was found to be symmetric, always play conway
         transition_mode = conway;
       } 
       else {
